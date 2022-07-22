@@ -112,7 +112,7 @@ int udpOutPut(const char *buf, int len, ikcpcb *kcp, void *user){
     if (n >= 0) 
 	{       
 		//会重复发送，因此牺牲带宽
-		//printf("udpOutPut-send: 字节 =%d bytes   内容=[%s]\n", n ,buf+24);//24字节的KCP头部
+		// printf("udpOutPut-send: 字节 =%d bytes   内容=[%s]\n", n ,buf+24);//24字节的KCP头部
         return n;
     } 
 	else 
@@ -148,24 +148,39 @@ void loop(kcpObj *send)
 {
 	unsigned int len = sizeof(struct sockaddr_in);
 	int n,ret;
+	int cnt = 0;
+	int time_out = 0;
+	int i =0;
+	char buf[4096]={0};
 
 	while(1)
 	{
-		isleep(1);
+		isleep(10);	// 延时10ms
 		
 		//ikcp_update包含ikcp_flush，ikcp_flush将发送队列中的数据通过下层协议UDP进行发送
 		ikcp_update(send->pkcp,iclock());//不是调用一次两次就起作用，要loop调用
+		
+		time_out ++;
+		if(time_out >= 5)
+		{
+			time_out = 0;
+			for(i=0; i<sizeof(buf); i++)
+				buf[i] = i&0xff;
 
-		char buf[512]={0};
+			ret = ikcp_send(send->pkcp, buf, sizeof(buf));//strlen(send->buff)+1
+			// printf("ikcp_send ret :%d buf[%ld]:[%s] %d\n",ret, strlen(buf), buf, iclock());//发送成功的
+			printf("ikcp_send ret :%d buf[%ld] %d cnt:%d\n",ret, sizeof(buf), iclock(), cnt++);//发送成功的
+		}
+		
 
-		//处理收消息
-		n = recvfrom(send->sockfd,buf,512,MSG_DONTWAIT,(struct sockaddr *) &send->addr,&len);
-	
+		// !!!重要 这个地方是用于处理对端发的ACK
+		// PS:这个地方如果不处理的话，会让KCP认为丢包了，触发重传
+		// 在使用者角度会看到，第一帧消息不断地被重传
+		char buf[1024]={0};
+		n = recvfrom(send->sockfd,buf,sizeof(buf),MSG_DONTWAIT,(struct sockaddr *) &send->addr,&len);
 		if(n < 0)//检测是否有UDP数据包
 			continue;
 			
-	printf("UDP接收到数据包  大小= %d   buf =%s\n",n,buf+24);		
-		
 		//预接收数据:调用ikcp_input将裸数据交给KCP，这些数据有可能是KCP控制报文，并不是我们要的数据。 
 		//kcp接收到下层协议UDP传进来的数据底层数据buffer转换成kcp的数据包格式
 		ret = ikcp_input(send->pkcp, buf, n);	
@@ -175,44 +190,6 @@ void loop(kcpObj *send)
 			continue;			
 		}
 		
-//		ikcp_update(send->pkcp,iclock());//不是调用一次两次就起作用，要loop调用
-		
-		while(1)
-		{	
-			//kcp将接收到的kcp数据包还原成之前kcp发送的buffer数据		
-			ret = ikcp_recv(send->pkcp, buf, n);		
-			if(ret < 0)//检测ikcp_recv提取到的数据	
-			{
-				//printf("ikcp_recv ret = %d\n",ret);
-				break;
-			}
-		}
-		
-		printf("数据交互  ip = %s  port = %d\n",inet_ntoa(send->addr.sin_addr),ntohs(send->addr.sin_port));	
-		
-		if(strcmp(buf,"Conn-OK") == 0)
-		{
-			//kcp收到确认连接包，则进行交互
-			printf("Data from Server-> %s\n",buf);	
-			//把要发送的buffer分片成KCP的数据包格式，插入待发送队列中。
-			ret = ikcp_send(send->pkcp, send->buff,sizeof(send->buff) );//strlen(send->buff)+1
-			printf("Client reply -> 内容[%s] 字节[%d]  ret = %d\n",send->buff,(int)sizeof(send->buff),ret);//发送成功的
-			number++;
-			printf("第[%d]次发\n",number);					
-		}
-		
-		//发消息
-		if(strcmp(buf,"Server:Hello!") == 0)
-		{		
-			//kcp收到确认连接包，则进行交互
-			printf("Data from Server-> %s\n",buf);
-			
-			//kcp收到交互包，则回复	
-			//把要发送的buffer分片成KCP的数据包格式，插入待发送队列中。
-			ikcp_send(send->pkcp, send->buff, sizeof(send->buff));				
-			number++;		
-			printf("第[%d]次发\n",number);
-		}	
 	}
 	
 }
@@ -236,22 +213,12 @@ int main(int argc,char *argv[])
 	
 	init(&send);//初始化send,主要是设置与服务器通信的套接字对象
 	
-	bzero(send.buff,sizeof(send.buff));
-	char Msg[] = "Client:Hello!";//与服务器后续交互	
-	memcpy(send.buff,Msg,sizeof(Msg));
-	
 	ikcpcb *kcp = ikcp_create(0x1, (void *)&send);//创建kcp对象把send传给kcp的user变量
 	kcp->output = udpOutPut;//设置kcp对象的回调函数
 	ikcp_nodelay(kcp,0, 10, 0, 0);//(kcp1, 0, 10, 0, 0); 1, 10, 2, 1
 	ikcp_wndsize(kcp, 128, 128);
-	
 	send.pkcp = kcp;
 	
-	char temp[] = "Conn";//与服务器初次通信		
-	int	ret = ikcp_send(send.pkcp,temp,(int)sizeof(temp)); 
-		printf("ikcp_send发送连接请求： [%s] len=%d ret = %d\n",temp,(int)sizeof(temp),ret);//发送成功的
-		
-
 	loop(&send);//循环处理
 	
 	return 0;	

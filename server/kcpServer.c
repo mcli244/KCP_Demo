@@ -114,7 +114,7 @@ int udpOutPut(const char *buf, int len, ikcpcb *kcp, void *user){
     if (n >= 0)       
    	{       
 		//会重复发送，因此牺牲带宽
-		printf("udpOutPut-send: 字节 =%d bytes   内容=[%s]\n", n ,buf+24);//24字节的KCP头部
+		// printf("udpOutPut-send: 字节 =%d bytes   内容=[%s]\n", n ,buf+24);//24字节的KCP头部
         return n;
     } 
 	else 
@@ -124,7 +124,7 @@ int udpOutPut(const char *buf, int len, ikcpcb *kcp, void *user){
     }
 }
 
-
+char buf[2048]={0};
 int init(kcpObj *send)
 {	
 	send->sockfd = socket(AF_INET,SOCK_DGRAM,0);
@@ -158,75 +158,54 @@ int init(kcpObj *send)
 
 void loop(kcpObj *send)
 {
-	unsigned int len = sizeof(struct sockaddr_in);
+	int len = sizeof(struct sockaddr_in);
 	int n,ret;	
+	int cnt = 0;
 	//接收到第一个包就开始循环处理
 	
 	while(1)
 	{
 		isleep(1);		
 		ikcp_update(send->pkcp,iclock());
-		
-		char buf[1024]={0};
-	
+
 		//处理收消息
-    	n = recvfrom(send->sockfd,buf,512,MSG_DONTWAIT,(struct sockaddr *)&send->CientAddr,&len);			
-		
-		if(n < 0)//检测是否有UDP数据包: kcp头部+data
-			continue;
-		
-printf("UDP接收到数据包  大小= %d   \n",n);
-	
-		//预接收数据:调用ikcp_input将裸数据交给KCP，这些数据有可能是KCP控制报文，并不是我们要的数据。 
-		//kcp接收到下层协议UDP传进来的数据底层数据buffer转换成kcp的数据包格式
-		ret = ikcp_input(send->pkcp, buf, n);
-		
-		// if(ret < 0)//检测ikcp_input对 buf 是否提取到真正的数据	
-		// {	
-			// printf("ikcp_input error ret = %d\n",ret);
-			// continue;
-		// }
-
-		while(1)	
-		{			
-			//kcp将接收到的kcp数据包还原成之前kcp发送的buffer数据		
-			ret = ikcp_recv(send->pkcp, buf, n);//从 buf中 提取真正数据，返回提取到的数据大小
-			if(ret < 0)//检测ikcp_recv提取到的数据	
-				break;
-		}
-
-		printf("数据交互  ip = %s  port = %d\n",inet_ntoa(send->CientAddr.sin_addr),ntohs(send->CientAddr.sin_port));
-		
-		//发消息
-		if(strcmp(buf,"Conn") == 0)
+		while(1)
 		{
-			//kcp提取到真正的数据	
-			printf("[Conn]  Data from Client-> %s\n",buf);
+			memset(buf, 0, sizeof(buf));
+			n = recvfrom(send->sockfd, buf, sizeof(buf), MSG_DONTWAIT, (struct sockaddr *)&send->CientAddr, (socklen_t *)&len);			
 			
-			//kcp收到连接请求包，则回复确认连接包		
-			char temp[] = "Conn-OK";	
-			
-			//ikcp_send只是把数据存入发送队列，没有对数据加封kcp头部数据
-			//应该是在kcp_update里面加封kcp头部数据
-			//ikcp_send把要发送的buffer分片成KCP的数据包格式，插入待发送队列中。
-			ret = ikcp_send(send->pkcp,temp,(int)sizeof(temp));			
-			printf("Server reply -> 内容[%s] 字节[%d] ret = %d\n",temp,(int)sizeof(temp),ret);
-			
-			number++;
-			printf("第[%d]次发\n",number);			
-		}	
-		
-		if(strcmp(buf,"Client:Hello!") == 0)
-		{				
-			//kcp提取到真正的数据	
-			printf("[Hello]  Data from Client-> %s\n",buf);
-			//kcp收到交互包，则回复			
-			ikcp_send(send->pkcp, send->buff,sizeof(send->buff));				
-			number++;		
-			printf("第[%d]次发\n",number);
+			if(n < 0)//检测是否有UDP数据包: kcp头部+data
+				break;
+			//预接收数据:调用ikcp_input将裸数据交给KCP，这些数据有可能是KCP控制报文，并不是我们要的数据。 
+			//kcp接收到下层协议UDP传进来的数据底层数据buffer转换成kcp的数据包格式
+			// printf("recvfrom buf[%d]:[%s]\r\n", n, buf+24);
+			ikcp_input(send->pkcp, buf, n);
 		}
+		
 
+		while (1) {
+            uint8_t kcpbuf[4096];
+			int hr = ikcp_recv(send->pkcp, kcpbuf, sizeof(kcpbuf));
+			if(hr < 0) break;
 
+			// 校验数据
+			int i = 0;
+			for(i=0; i<hr; i++)
+			{
+				if(kcpbuf[i] != (i&0xff))
+					break;
+			}
+			// 打印来自服务端发送来的数据
+            printf("cnt:%d Recv From Server[%d] ",cnt++ , hr);
+			if(i < hr)
+			{
+				printf("check failed kcpbuf[%d]:%d -- i&0xff:%d\r\n", i, kcpbuf[i], (i&0xff));
+			}
+			else
+			{
+				printf("check pass\r\n");
+			}
+        }
 	}	
 }
 
@@ -242,11 +221,6 @@ int main(int argc,char *argv[])
 	kcpObj send;
 	send.port = atoi(argv[1]);
 	send.pkcp = NULL;
-	
-	bzero(send.buff,sizeof(send.buff));
-	char Msg[] = "Server:Hello!";//与客户机后续交互	
-	memcpy(send.buff,Msg,sizeof(Msg));
-
 	ikcpcb *kcp = ikcp_create(0x1, (void *)&send);//创建kcp对象把send传给kcp的user变量
 	kcp->output = udpOutPut;//设置kcp对象的回调函数
 	ikcp_nodelay(kcp, 0, 10, 0, 0);//1, 10, 2, 1
