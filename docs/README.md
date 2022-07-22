@@ -24,7 +24,7 @@ make
 
 服务端：接收到数据后校验
 
-![](TCK_Demo.png)
+![](https://github.com/mcli244/KCP_Demo/blob/master/docs/TCK_Demo.png)
 
 
 
