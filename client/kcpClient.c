@@ -155,13 +155,13 @@ void loop(kcpObj *send)
 
 	while(1)
 	{
-		isleep(1000);	// 延时10ms
+		isleep(10);	// 延时10ms
 		
 		//ikcp_update包含ikcp_flush，ikcp_flush将发送队列中的数据通过下层协议UDP进行发送
 		ikcp_update(send->pkcp,iclock());//不是调用一次两次就起作用，要loop调用
 		
 		time_out ++;
-		if(time_out >= 2)
+		if(time_out >= 5)
 		{
 			time_out = 0;
 			for(i=0; i<sizeof(buf); i++)
